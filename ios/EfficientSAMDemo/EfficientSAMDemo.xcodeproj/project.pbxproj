@@ -10,22 +10,32 @@
 		000000000000000000001002 /* EfficientSAMDemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001001 /* EfficientSAMDemoApp.swift */; };
 		000000000000000000001004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001003 /* ContentView.swift */; };
 		000000000000000000001006 /* Segmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001005 /* Segmenter.swift */; };
-		000000000000000000001008 /* efficient_sam_vitt_encoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001007 /* efficient_sam_vitt_encoder.mlpackage */; };
-		00000000000000000000100A /* efficient_sam_vitt_decoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001009 /* efficient_sam_vitt_decoder.mlpackage */; };
+		000000000000000000001008 /* PromptSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001007 /* PromptSegmenter.swift */; };
+		00000000000000000000100A /* efficient_sam_vitt_encoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001009 /* efficient_sam_vitt_encoder.mlpackage */; };
+		00000000000000000000100C /* efficient_sam_vitt_decoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100B /* efficient_sam_vitt_decoder.mlpackage */; };
+		00000000000000000000100E /* efficient_sam_vitt_prompt_encoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100D /* efficient_sam_vitt_prompt_encoder.mlpackage */; };
+		000000000000000000001010 /* efficient_sam_vitt_prompt_decoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000100F /* efficient_sam_vitt_prompt_decoder.mlpackage */; };
+		000000000000000000001012 /* efficient_sam_vits_prompt_encoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001011 /* efficient_sam_vits_prompt_encoder.mlpackage */; };
+		000000000000000000001014 /* efficient_sam_vits_prompt_decoder.mlpackage in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000001013 /* efficient_sam_vits_prompt_decoder.mlpackage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		000000000000000000001001 /* EfficientSAMDemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EfficientSAMDemoApp.swift; sourceTree = "<group>"; };
 		000000000000000000001003 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		000000000000000000001005 /* Segmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Segmenter.swift; sourceTree = "<group>"; };
-		000000000000000000001007 /* efficient_sam_vitt_encoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_encoder.mlpackage; sourceTree = "<group>"; };
-		000000000000000000001009 /* efficient_sam_vitt_decoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_decoder.mlpackage; sourceTree = "<group>"; };
-		00000000000000000000100B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		00000000000000000000100E /* EfficientSAMDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EfficientSAMDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000001007 /* PromptSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptSegmenter.swift; sourceTree = "<group>"; };
+		000000000000000000001009 /* efficient_sam_vitt_encoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_encoder.mlpackage; sourceTree = "<group>"; };
+		00000000000000000000100B /* efficient_sam_vitt_decoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_decoder.mlpackage; sourceTree = "<group>"; };
+		00000000000000000000100D /* efficient_sam_vitt_prompt_encoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_prompt_encoder.mlpackage; sourceTree = "<group>"; };
+		00000000000000000000100F /* efficient_sam_vitt_prompt_decoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vitt_prompt_decoder.mlpackage; sourceTree = "<group>"; };
+		000000000000000000001011 /* efficient_sam_vits_prompt_encoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vits_prompt_encoder.mlpackage; sourceTree = "<group>"; };
+		000000000000000000001013 /* efficient_sam_vits_prompt_decoder.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = efficient_sam_vits_prompt_decoder.mlpackage; sourceTree = "<group>"; };
+		000000000000000000001015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		000000000000000000001018 /* EfficientSAMDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EfficientSAMDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		000000000000000000001013 /* Frameworks */ = {
+		00000000000000000000101D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -35,31 +45,36 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		00000000000000000000100F = {
+		000000000000000000001019 = {
 			isa = PBXGroup;
 			children = (
-				000000000000000000001010 /* EfficientSAMDemo */,
-				000000000000000000001011 /* Products */,
+				00000000000000000000101A /* EfficientSAMDemo */,
+				00000000000000000000101B /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		000000000000000000001010 /* EfficientSAMDemo */ = {
+		00000000000000000000101A /* EfficientSAMDemo */ = {
 			isa = PBXGroup;
 			children = (
 				000000000000000000001001 /* EfficientSAMDemoApp.swift */,
 				000000000000000000001003 /* ContentView.swift */,
 				000000000000000000001005 /* Segmenter.swift */,
-				000000000000000000001007 /* efficient_sam_vitt_encoder.mlpackage */,
-				000000000000000000001009 /* efficient_sam_vitt_decoder.mlpackage */,
-				00000000000000000000100B /* Info.plist */,
+				000000000000000000001007 /* PromptSegmenter.swift */,
+				000000000000000000001009 /* efficient_sam_vitt_encoder.mlpackage */,
+				00000000000000000000100B /* efficient_sam_vitt_decoder.mlpackage */,
+				00000000000000000000100D /* efficient_sam_vitt_prompt_encoder.mlpackage */,
+				00000000000000000000100F /* efficient_sam_vitt_prompt_decoder.mlpackage */,
+				000000000000000000001011 /* efficient_sam_vits_prompt_encoder.mlpackage */,
+				000000000000000000001013 /* efficient_sam_vits_prompt_decoder.mlpackage */,
+				000000000000000000001015 /* Info.plist */,
 			);
 			path = EfficientSAMDemo;
 			sourceTree = "<group>";
 		};
-		000000000000000000001011 /* Products */ = {
+		00000000000000000000101B /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				00000000000000000000100E /* EfficientSAMDemo.app */,
+				000000000000000000001018 /* EfficientSAMDemo.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -67,13 +82,13 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		00000000000000000000100D /* EfficientSAMDemo */ = {
+		000000000000000000001017 /* EfficientSAMDemo */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 000000000000000000001016 /* Build configuration list for PBXNativeTarget "EfficientSAMDemo" */;
+			buildConfigurationList = 000000000000000000001020 /* Build configuration list for PBXNativeTarget "EfficientSAMDemo" */;
 			buildPhases = (
-				000000000000000000001012 /* Sources */,
-				000000000000000000001013 /* Frameworks */,
-				000000000000000000001014 /* Resources */,
+				00000000000000000000101C /* Sources */,
+				00000000000000000000101D /* Frameworks */,
+				00000000000000000000101E /* Resources */,
 			);
 			buildRules = (
 			);
@@ -81,25 +96,25 @@
 			);
 			name = EfficientSAMDemo;
 			productName = EfficientSAMDemo;
-			productReference = 00000000000000000000100E /* EfficientSAMDemo.app */;
+			productReference = 000000000000000000001018 /* EfficientSAMDemo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		00000000000000000000100C /* Project object */ = {
+		000000000000000000001016 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
-					00000000000000000000100D = {
+					000000000000000000001017 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
 			};
-			buildConfigurationList = 000000000000000000001015 /* Build configuration list for PBXProject "EfficientSAMDemo" */;
+			buildConfigurationList = 00000000000000000000101F /* Build configuration list for PBXProject "EfficientSAMDemo" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -107,43 +122,48 @@
 				en,
 				Base,
 			);
-			mainGroup = 00000000000000000000100F;
-			productRefGroup = 000000000000000000001011 /* Products */;
+			mainGroup = 000000000000000000001019;
+			productRefGroup = 00000000000000000000101B /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				00000000000000000000100D /* EfficientSAMDemo */,
+				000000000000000000001017 /* EfficientSAMDemo */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		000000000000000000001014 /* Resources */ = {
+		00000000000000000000101E /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				000000000000000000001008 /* efficient_sam_vitt_encoder.mlpackage in Resources */,
-				00000000000000000000100A /* efficient_sam_vitt_decoder.mlpackage in Resources */,
+				00000000000000000000100A /* efficient_sam_vitt_encoder.mlpackage in Resources */,
+				00000000000000000000100C /* efficient_sam_vitt_decoder.mlpackage in Resources */,
+				00000000000000000000100E /* efficient_sam_vitt_prompt_encoder.mlpackage in Resources */,
+				000000000000000000001010 /* efficient_sam_vitt_prompt_decoder.mlpackage in Resources */,
+				000000000000000000001012 /* efficient_sam_vits_prompt_encoder.mlpackage in Resources */,
+				000000000000000000001014 /* efficient_sam_vits_prompt_decoder.mlpackage in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		000000000000000000001012 /* Sources */ = {
+		00000000000000000000101C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000001002 /* EfficientSAMDemoApp.swift in Sources */,
 				000000000000000000001004 /* ContentView.swift in Sources */,
 				000000000000000000001006 /* Segmenter.swift in Sources */,
+				000000000000000000001008 /* PromptSegmenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		000000000000000000001017 /* Debug */ = {
+		000000000000000000001021 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -165,7 +185,7 @@
 			};
 			name = Debug;
 		};
-		000000000000000000001018 /* Release */ = {
+		000000000000000000001022 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -184,7 +204,7 @@
 			};
 			name = Release;
 		};
-		000000000000000000001019 /* Debug */ = {
+		000000000000000000001023 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -208,7 +228,7 @@
 			};
 			name = Debug;
 		};
-		00000000000000000000101A /* Release */ = {
+		000000000000000000001024 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -235,25 +255,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		000000000000000000001015 /* Build configuration list for PBXProject "EfficientSAMDemo" */ = {
+		00000000000000000000101F /* Build configuration list for PBXProject "EfficientSAMDemo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000000001017 /* Debug */,
-				000000000000000000001018 /* Release */,
+				000000000000000000001021 /* Debug */,
+				000000000000000000001022 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		000000000000000000001016 /* Build configuration list for PBXNativeTarget "EfficientSAMDemo" */ = {
+		000000000000000000001020 /* Build configuration list for PBXNativeTarget "EfficientSAMDemo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				000000000000000000001019 /* Debug */,
-				00000000000000000000101A /* Release */,
+				000000000000000000001023 /* Debug */,
+				000000000000000000001024 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = 00000000000000000000100C /* Project object */;
+	rootObject = 000000000000000000001016 /* Project object */;
 }

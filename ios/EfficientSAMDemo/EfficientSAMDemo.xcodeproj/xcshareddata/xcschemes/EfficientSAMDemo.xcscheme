@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "00000000000000000000100D"
+               BlueprintIdentifier = "000000000000000000001017"
                BuildableName = "EfficientSAMDemo.app"
                BlueprintName = "EfficientSAMDemo"
                ReferencedContainer = "container:EfficientSAMDemo.xcodeproj">
@@ -43,7 +43,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "00000000000000000000100D"
+            BlueprintIdentifier = "000000000000000000001017"
             BuildableName = "EfficientSAMDemo.app"
             BlueprintName = "EfficientSAMDemo"
             ReferencedContainer = "container:EfficientSAMDemo.xcodeproj">
@@ -60,7 +60,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "00000000000000000000100D"
+            BlueprintIdentifier = "000000000000000000001017"
             BuildableName = "EfficientSAMDemo.app"
             BlueprintName = "EfficientSAMDemo"
             ReferencedContainer = "container:EfficientSAMDemo.xcodeproj">

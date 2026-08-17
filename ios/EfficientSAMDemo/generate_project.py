@@ -20,10 +20,25 @@ APP = "EfficientSAMDemo"
 SRC_DIR = os.path.join(HERE, APP)
 PROJ_DIR = os.path.join(HERE, f"{APP}.xcodeproj")
 
-SOURCES = ["EfficientSAMDemoApp.swift", "ContentView.swift", "Segmenter.swift"]
+SOURCES = [
+    "EfficientSAMDemoApp.swift",
+    "ContentView.swift",
+    "Segmenter.swift",
+    "PromptSegmenter.swift",
+]
+
+# Two separate exports with different input contracts, not two settings of one
+# model. The segment-everything pair letterboxes; the prompt pair stretches.
+# See PromptSegmenter.swift.
 MODELS = [
+    # segment-everything — EfficientSAM_coreml_export.ipynb
     "efficient_sam_vitt_encoder.mlpackage",
     "efficient_sam_vitt_decoder.mlpackage",
+    # tap-to-segment — EfficientSAM_prompt_coreml_export.ipynb
+    "efficient_sam_vitt_prompt_encoder.mlpackage",
+    "efficient_sam_vitt_prompt_decoder.mlpackage",
+    "efficient_sam_vits_prompt_encoder.mlpackage",
+    "efficient_sam_vits_prompt_decoder.mlpackage",
 ]
 
 # Deterministic 24-hex-char object IDs. Xcode only requires uniqueness.
@@ -47,8 +62,13 @@ def copy_models():
         src = os.path.join(REPO, "weights", "coreml", m)
         dst = os.path.join(SRC_DIR, m)
         if not os.path.isdir(src):
+            notebook = (
+                "EfficientSAM_prompt_coreml_export.ipynb"
+                if "_prompt_" in m
+                else "EfficientSAM_coreml_export.ipynb"
+            )
             print(f"  !! missing {src}")
-            print("     Run notebooks/EfficientSAM_coreml_export.ipynb first.")
+            print(f"     Run notebooks/{notebook} first.")
             continue
         if os.path.isdir(dst):
             shutil.rmtree(dst)

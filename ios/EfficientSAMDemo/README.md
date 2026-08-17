@@ -1,15 +1,24 @@
 # EfficientSAM iOS Demo
 
-Pick a photo, run EfficientSAM's segment-everything on device, see the masks.
+Pick a photo and either segment everything at once, or tap an object to segment
+just that one — both on device.
+
+| mode | what it does | models |
+|---|---|---|
+| **Everything** | one pass over an N×N grid of prompts, returns every object | `*_encoder` / `*_decoder` |
+| **Tap to Segment** | encode once, then one mask per tap | `*_prompt_encoder` / `*_prompt_decoder` |
 
 ## Build
 
-The Core ML models must exist before generating the project:
+The Core ML models must exist before generating the project. Both notebooks are
+required — they produce **different** models, not two settings of one:
 
 ```bash
 # 1. Export the models (from the repo root)
 jupyter nbconvert --to notebook --execute --inplace \
   notebooks/EfficientSAM_coreml_export.ipynb
+jupyter nbconvert --to notebook --execute --inplace \
+  notebooks/EfficientSAM_prompt_coreml_export.ipynb
 
 # 2. Generate the Xcode project and copy the models in
 cd ios/EfficientSAMDemo
@@ -27,9 +36,36 @@ run on a physical device; the simulator needs no signing.
 
 | file | role |
 |---|---|
-| `Segmenter.swift` | the whole pipeline — encode, batched decode, filter, NMS, render |
-| `ContentView.swift` | landing screen, picker, progress, results |
+| `Segmenter.swift` | everything mode — encode, batched decode, filter, NMS, render |
+| `PromptSegmenter.swift` | tap mode — encode once, one decoder call per tap |
+| `ContentView.swift` | landing screen, mode picker, progress, results |
 | `generate_project.py` | writes `project.pbxproj`, `Info.plist`, scheme; copies models |
+
+## The two model families are not interchangeable
+
+This is the thing most likely to waste your afternoon. The exports differ in
+their **input contract**, and mixing them produces masks that look plausible and
+are wrong:
+
+| | segment-everything | prompt |
+|---|---|---|
+| resize to 1024 | letterbox, pad bottom-right | **stretch**, aspect not preserved |
+| normalization | *not applied* (see below) | ImageNet mean/std, folded into graph |
+| prompts per call | 8 queries × 1 point | 1 query × 2 points |
+| labels used | `1` | `1`, or `2`/`3` for box corners |
+| candidate sorting | host picks argmax IoU | sorted inside the graph, take index 0 |
+
+Because the prompt models stretch, prompt coordinates scale by `1024/width` and
+`1024/height` **independently**. A single uniform scale factor is only correct
+for square images.
+
+> **Known gap:** the segment-everything encoder skips `EfficientSam.preprocess`
+> normalization — it feeds raw `[0,1]` to `patch_embed`. It is self-consistent
+> end to end and produces sane masks, but it is off-distribution from training.
+> The prompt export folds normalization into the graph and asserts against
+> `get_image_embeddings` (the stock path), so it cannot regress the same way.
+> Fixing the everything models means re-exporting and re-running
+> `generate_project.py`; mask output will shift.
 
 ## How it works
 
@@ -89,3 +125,26 @@ every grid point then lands on the wrong content.
   against `.cpuAndNeuralEngine` in Instruments before assuming ANE residency.
 - Detail picker: Fast = 8×8 (64 prompts), Balanced = 16×16 (256), Thorough =
   32×32 (1024).
+- Tap mode offers ViT-Tiny (10M) and ViT-Small (26M). Switching variants
+  discards the cached embedding — it was produced by a different encoder and
+  means nothing to the other decoder.
+
+## One tap is a weak prompt
+
+Measured on `figs/examples/dogs.jpg` at (580, 350), ViT-Tiny:
+
+| prompt | predicted IoU | coverage |
+|---|---|---|
+| one point, second slot ignored | 0.564 | 2.0% |
+| two points on the same dog | 0.904 | 11.8% |
+| box around both dogs | 0.924 | 11.7% |
+
+A single click returns a *part* of the object (here, the tan dog's chest) rather
+than the whole animal. That is normal SAM behaviour for an ambiguous click, not
+a coordinate bug — the returned mask is centred exactly on the tap.
+
+Duplicating the tap into both prompt slots raises predicted IoU to 0.703 while
+coverage stays at 1.9% — the same partial mask, just scored more confidently.
+It is not an improvement, so `segment(atPoint:)` keeps the honest single-point
+encoding (`label = -1` on the unused slot). Use `segmentPair(a:b:)` or
+`segment(box:)` when a stronger prompt is available.
