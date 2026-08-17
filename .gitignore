@@ -5,3 +5,9 @@ __py
 **/__pycache__/
 .DS_Store
 __MACOSX
+
+# Model weights - too large for GitHub, distribute via Releases
+weights/*.pt
+weights/*.pth
+weights/*.zip
+weights/*.onnx
