@@ -13,3 +13,19 @@ weights/*.zip
 weights/*.onnx
 weights/coreml/
 weights/tflite/
+
+# Android build outputs and machine-local config
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+android/.kotlin/
+*.apk
+*.aab
+
+# Model assets are symlinks into the gitignored weights/tflite/ dir.
+# The .tflite binaries are distributed via Releases, not committed.
+android/app/src/main/assets/*.tflite
