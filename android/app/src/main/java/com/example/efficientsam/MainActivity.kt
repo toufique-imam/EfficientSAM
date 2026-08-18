@@ -62,6 +62,7 @@ fun TapToSegmentScreen() {
     var error by remember { mutableStateOf<String?>(null) }
     var selfTestResults by remember { mutableStateOf<List<PromptSegmenter.VariantCheck>?>(null) }
     var isSelfTesting by remember { mutableStateOf(false) }
+    var gridResults by remember { mutableStateOf<List<PromptSegmenter.GridResult>?>(null) }
 
     fun encode(bitmap: Bitmap) {
         scope.launch {
@@ -123,6 +124,20 @@ fun TapToSegmentScreen() {
                     onPick = { picker.launch("image/*") },
                     isSelfTesting = isSelfTesting,
                     selfTestResults = selfTestResults,
+                    gridResults = gridResults,
+                    onBenchmarkGrid = {
+                        scope.launch {
+                            isSelfTesting = true
+                            gridResults = null
+                            try {
+                                gridResults = segmenter.benchmarkGrid()
+                            } catch (e: Exception) {
+                                error = e.message ?: "Benchmark failed."
+                            } finally {
+                                isSelfTesting = false
+                            }
+                        }
+                    },
                     onSelfTest = {
                         scope.launch {
                             isSelfTesting = true
@@ -181,6 +196,8 @@ private fun LandingView(
     isSelfTesting: Boolean,
     selfTestResults: List<PromptSegmenter.VariantCheck>?,
     onSelfTest: () -> Unit,
+    gridResults: List<PromptSegmenter.GridResult>?,
+    onBenchmarkGrid: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -283,9 +300,67 @@ private fun LandingView(
             }
         }
 
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedButton(
+            onClick = onBenchmarkGrid,
+            enabled = !isSelfTesting,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Benchmark Grid") }
+
         if (selfTestResults != null) {
             Spacer(Modifier.height(16.dp))
             SelfTestReport(selfTestResults)
+        }
+
+        if (gridResults != null && gridResults.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            GridReport(gridResults)
+        }
+    }
+}
+
+/**
+ * The model x precision x threads sweep, grouped by variant.
+ *
+ * Encode, decode and memory sit on one line per thread count so the two
+ * independent effects stay readable: moving down a group shows what threads
+ * buy, moving between groups shows what precision buys.
+ */
+@Composable
+private fun GridReport(results: List<PromptSegmenter.GridResult>) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                "Model × precision × threads",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            results.groupBy { it.variant }.forEach { (variant, rows) ->
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    variant.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                // Speedup is relative to this variant's own single-thread time,
+                // so each group reads independently of the others.
+                val base = rows.firstOrNull { it.threads == 1 }?.encodeMillis
+                rows.sortedBy { it.threads }.forEach { r ->
+                    val speedup = base?.let { " ${"%.2f".format(it.toFloat() / r.encodeMillis)}x" } ?: ""
+                    Text(
+                        "${r.threads}t ${r.encodeMillis}ms enc · ${r.decodeMillis}ms dec · " +
+                            "${r.peakMemoryMb}MB peak · ${r.modelMemoryMb}MB model$speedup",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }

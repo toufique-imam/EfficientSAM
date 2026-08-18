@@ -167,6 +167,18 @@ class PromptSegmenter(private val context: Context) {
     var usingGpu: Boolean = false
         private set
 
+    /**
+     * Interpreter threads. Defaults to every core.
+     *
+     * The old default capped at 4, which left half of an 8-core device idle.
+     * Raising it is worth little though: measured on the M12 (8x Cortex-A55,
+     * no big/little split) the vitt encoder runs 36.0 s at 1 thread, 21.3 s at
+     * 4, and 19.8 s at 8 -- so 4 -> 8 buys about 7%. This graph is closer to
+     * memory-bound than compute-bound; a third of its ops are RESHAPE and
+     * TRANSPOSE, which move data without doing arithmetic.
+     */
+    var threads: Int = Runtime.getRuntime().availableProcessors()
+
     /** Cached per-image state, so taps only pay for the decoder. */
     private var embedding: ByteBuffer? = null
     private var sourceImage: Bitmap? = null
@@ -190,7 +202,7 @@ class PromptSegmenter(private val context: Context) {
         if (encoder != null && decoder != null) return
 
         val options = Interpreter.Options().apply {
-            numThreads = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
+            numThreads = threads
         }
 
         // The GPU delegate is a best-effort speedup. These graphs contain ops
@@ -253,7 +265,7 @@ class PromptSegmenter(private val context: Context) {
             Log.w(TAG, "$asset failed with GPU delegate, retrying on CPU: ${first.message}", first)
             gpuDelegate?.close()
             gpuDelegate = null
-            Interpreter(mapAsset(asset), Interpreter.Options().apply { numThreads = 4 })
+            Interpreter(mapAsset(asset), Interpreter.Options().apply { numThreads = threads })
         }
 
     /**
@@ -545,6 +557,195 @@ class PromptSegmenter(private val context: Context) {
         // UI had cached is stale. Drop it rather than leave a mismatched pair.
         lock.withLock { closeLocked() }
         results
+    }
+
+    /** One cell of the [benchmarkGrid] sweep. */
+    @Immutable
+    data class GridResult(
+        val variant: Variant,
+        val threads: Int,
+        val encodeMillis: Long,
+        val decodeMillis: Long,
+        /** Peak total PSS observed during this cell, in MB. */
+        val peakMemoryMb: Int = 0,
+        /** Native heap growth attributable to this variant's interpreters, MB. */
+        val modelMemoryMb: Int = 0,
+    )
+
+    /**
+     * Sweeps every bundled variant against every thread count.
+     *
+     * This is the full model x precision x threads grid, which is what makes
+     * the two effects separable: precision changes how much data each op
+     * touches, thread count changes how much of the machine is working on it,
+     * and they do not compose the way one would guess (fp16 costs the same as
+     * fp32 here, because XNNPACK dequantizes to float32 to compute).
+     *
+     * Long-running by design -- on a slow device this is several minutes per
+     * row -- so it logs each cell as it completes rather than only returning
+     * at the end.
+     */
+    suspend fun benchmarkGrid(
+        counts: List<Int> = listOf(1, 4, Runtime.getRuntime().availableProcessors()),
+    ): List<GridResult> = withContext(Dispatchers.Default) {
+        val bundled = context.assets.list("")?.toSet().orEmpty()
+        val variants = Variant.entries.filter {
+            it.encoderAsset in bundled && it.decoderAsset in bundled
+        }
+        val probe = context.assets.open(TEST_IMAGE).use { stream ->
+            BitmapFactory.decodeStream(
+                stream, null,
+                BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
+            )
+        } ?: return@withContext emptyList()
+        val input = makeImageInput(probe)
+        val promptX = probe.width * TEST_PROMPT_X
+        val promptY = probe.height * TEST_PROMPT_Y
+
+        val original = threads
+        val out = mutableListOf<GridResult>()
+
+        // One lock for the whole sweep; see benchmarkThreads for why taking it
+        // per iteration and again in a finally deadlocks.
+        lock.lock()
+        try {
+            for (v in variants) {
+                for (n in counts.distinct().sorted()) {
+                    try {
+                        closeLocked()
+                        // Interpreters are freed above, so this is the floor to
+                        // measure this cell's growth from. Native heap is the
+                        // number that matters: TFLite holds weights and the
+                        // tensor arena off the Java heap.
+                        System.gc()
+                        val baselineNative = Debug.getNativeHeapAllocatedSize()
+
+                        threads = n
+                        loadModels(v)
+                        val enc = encoder ?: continue
+                        val dec = decoder ?: continue
+
+                        val embed = ByteBuffer
+                            .allocateDirect(EMBED_C * EMBED_HW * EMBED_HW * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val encStart = System.nanoTime()
+                        input.rewind()
+                        enc.run(input, embed)
+                        val encMs = (System.nanoTime() - encStart) / 1_000_000
+                        // Sampled right after encode: the encoder arena is the
+                        // high-water mark, the decoder is much smaller.
+                        var peakNative = Debug.getNativeHeapAllocatedSize()
+                        embed.rewind()
+
+                        val coords = ByteBuffer.allocateDirect(NUM_POINTS * 2 * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val labels = ByteBuffer.allocateDirect(NUM_POINTS * 4)
+                            .order(ByteOrder.nativeOrder())
+                        coords.putFloat(promptX * ENCODER_SIZE / probe.width)
+                        coords.putFloat(promptY * ENCODER_SIZE / probe.height)
+                        coords.putFloat(0f)
+                        coords.putFloat(0f)
+                        labels.putFloat(1f)
+                        labels.putFloat(-1f)
+                        coords.rewind(); labels.rewind()
+
+                        val masks = ByteBuffer
+                            .allocateDirect(NUM_CANDIDATES * OUTPUT_SIZE * OUTPUT_SIZE * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val ious = ByteBuffer.allocateDirect(NUM_CANDIDATES * 4)
+                            .order(ByteOrder.nativeOrder())
+                        val decStart = System.nanoTime()
+                        dec.runForMultipleInputsOutputs(
+                            arrayOf<Any>(embed, coords, labels),
+                            mapOf<Int, Any>(0 to masks, 1 to ious),
+                        )
+                        val decMs = (System.nanoTime() - decStart) / 1_000_000
+                        peakNative = maxOf(peakNative, Debug.getNativeHeapAllocatedSize())
+
+                        val memInfo = Debug.MemoryInfo()
+                        Debug.getMemoryInfo(memInfo)
+                        val peakPssMb = memInfo.totalPss / 1024
+                        val modelMb = ((peakNative - baselineNative) / (1024 * 1024))
+                            .toInt().coerceAtLeast(0)
+
+                        Log.i(
+                            TAG,
+                            "grid ${v.displayName} threads=$n encode ${encMs}ms " +
+                                "decode ${decMs}ms peakPss ${peakPssMb}MB model ${modelMb}MB",
+                        )
+                        out += GridResult(v, n, encMs, decMs, peakPssMb, modelMb)
+                    } catch (e: Exception) {
+                        // A variant that will not load on this device (the int8
+                        // decoder was one) should cost its own row, not the run.
+                        Log.w(TAG, "grid ${v.displayName} threads=$n failed: ${e.message}")
+                    }
+                }
+            }
+        } finally {
+            probe.recycle()
+            closeLocked()
+            threads = original
+            lock.unlock()
+        }
+        out
+    }
+
+    /**
+     * Times one variant's encoder across thread counts, to find where this
+     * device stops gaining.
+     *
+     * Worth measuring rather than assuming: thread scaling on these graphs is
+     * well short of linear (a third of the ops are RESHAPE/TRANSPOSE, which are
+     * memory-bound), and the answer differs between a big/little SoC and the
+     * all-A55 chips these budget devices use.
+     *
+     * Restores [threads] and drops the interpreters before returning.
+     */
+    suspend fun benchmarkThreads(
+        v: Variant = Variant.VITT,
+        counts: List<Int> = listOf(1, 4, Runtime.getRuntime().availableProcessors()),
+    ): List<Pair<Int, Long>> = withContext(Dispatchers.Default) {
+        val original = threads
+        val probe = context.assets.open(TEST_IMAGE).use { stream ->
+            BitmapFactory.decodeStream(
+                stream, null,
+                BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
+            )
+        } ?: return@withContext emptyList()
+        val input = makeImageInput(probe)
+
+        // One lock for the whole sweep, released in the finally below.
+        // Taking it per iteration and again in finally deadlocks: Mutex is not
+        // reentrant, and the cleanup would wait on a frame that is still
+        // unwinding.
+        lock.lock()
+        try {
+            counts.distinct().sorted().map { n ->
+                closeLocked()
+                threads = n
+                loadModels(v)
+                val enc = encoder ?: throw ModelMissingException(v.encoderAsset)
+                val out = ByteBuffer
+                    .allocateDirect(EMBED_C * EMBED_HW * EMBED_HW * 4)
+                    .order(ByteOrder.nativeOrder())
+
+                // Single timed run per thread count. A warm-up pass would
+                // double an already multi-minute sweep on a slow device, and
+                // each iteration builds a fresh interpreter anyway, so there is
+                // no cross-iteration state for it to warm.
+                val start = System.nanoTime()
+                input.rewind()
+                enc.run(input, out)
+                val ms = (System.nanoTime() - start) / 1_000_000
+                Log.i(TAG, "threads=$n ${v.displayName} encode ${ms}ms")
+                n to ms
+            }
+        } finally {
+            probe.recycle()
+            closeLocked()
+            threads = original
+            lock.unlock()
+        }
     }
 
     private suspend fun checkVariant(v: Variant): VariantCheck = lock.withLock {
