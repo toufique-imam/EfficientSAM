@@ -292,7 +292,7 @@ private fun SelfTestReport(results: List<PromptSegmenter.VariantCheck>) {
                     if (check.passed) {
                         Spacer(Modifier.weight(1f))
                         Text(
-                            "${check.encodeMillis}ms enc · ${check.decodeMillis}ms dec",
+                            if (check.usedGpu) "GPU" else "CPU",
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -305,6 +305,15 @@ private fun SelfTestReport(results: List<PromptSegmenter.VariantCheck>) {
                     color = if (check.passed) MaterialTheme.colorScheme.onSurfaceVariant
                             else MaterialTheme.colorScheme.error,
                 )
+                if (check.passed) {
+                    Text(
+                        "${check.encodeMillis}ms enc · ${check.decodeMillis}ms dec · " +
+                            "${check.peakMemoryMb}MB peak · ${check.modelMemoryMb}MB model",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

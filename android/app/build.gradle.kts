@@ -56,8 +56,17 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // LiteRT (the current name for the TF Lite runtime). GPU delegate is
-    // optional at runtime -- see Segmenter for the CPU fallback.
-    implementation("com.google.ai.edge.litert:litert:1.0.1")
-    implementation("com.google.ai.edge.litert:litert-gpu:1.0.1")
+    // TF Lite runtime + GPU delegate, kept in one family on purpose.
+    //
+    // The com.google.ai.edge.litert:1.0.1 coordinates look like the modern
+    // choice, but litert-gpu:1.0.1 is broken: every GpuDelegate constructor --
+    // including the no-arg one -- touches GpuDelegateFactory$Options, and that
+    // class ships in none of the litert 1.0.1 artifacts, so building a
+    // delegate dies with NoClassDefFoundError at runtime and silently falls
+    // back to CPU. Mixing litert with tensorflow-lite-gpu is not an option
+    // either: both publish org.tensorflow.lite.* and the build fails on
+    // duplicate classes. So use tensorflow-lite for both halves.
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.16.1")
 }

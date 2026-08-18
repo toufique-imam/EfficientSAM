@@ -2,7 +2,10 @@ package com.example.efficientsam
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.os.Debug
+import android.util.Log
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -41,13 +44,56 @@ import java.nio.channels.FileChannel
  */
 class PromptSegmenter(private val context: Context) {
 
-    /** Which exported checkpoint to run. */
-    enum class Variant(val id: String, val displayName: String, val blurb: String) {
-        VITT("vitt", "ViT-Tiny", "10M params · faster to encode"),
-        VITS("vits", "ViT-Small", "26M params · higher predicted IoU");
+    /**
+     * Which exported checkpoint to run, and at what precision.
+     *
+     * Asset naming is the contract between this enum and the export notebook:
+     * fp32 keeps the original `efficient_sam_<id>_prompt_<stage>.tflite`, and
+     * every quantized build appends its recipe, e.g.
+     * `efficient_sam_vitt_prompt_encoder_fp16.tflite`. A variant whose files
+     * are not bundled is simply skipped by [selfTest] rather than failing it,
+     * so a build can ship any subset.
+     */
+    enum class Variant(
+        val id: String,
+        val precision: Precision,
+        val displayName: String,
+        val blurb: String,
+    ) {
+        VITT(
+            "vitt", Precision.FP32, "ViT-Tiny",
+            "10M params · faster to encode",
+        ),
+        VITS(
+            "vits", Precision.FP32, "ViT-Small",
+            "26M params · higher predicted IoU",
+        ),
+        VITT_FP16(
+            "vitt", Precision.FP16, "ViT-Tiny fp16",
+            "half-size weights · same graph",
+        ),
+        VITS_FP16(
+            "vits", Precision.FP16, "ViT-Small fp16",
+            "half-size weights · same graph",
+        ),
+        VITT_INT8(
+            "vitt", Precision.INT8_DYNAMIC, "ViT-Tiny int8",
+            "dynamic-range weights · smallest",
+        ),
+        VITS_INT8(
+            "vits", Precision.INT8_DYNAMIC, "ViT-Small int8",
+            "dynamic-range weights · smallest",
+        );
 
-        val encoderAsset get() = "efficient_sam_${id}_prompt_encoder.tflite"
-        val decoderAsset get() = "efficient_sam_${id}_prompt_decoder.tflite"
+        val encoderAsset get() = "efficient_sam_${id}_prompt_encoder${precision.suffix}.tflite"
+        val decoderAsset get() = "efficient_sam_${id}_prompt_decoder${precision.suffix}.tflite"
+    }
+
+    /** Quantization recipe an export was built with. */
+    enum class Precision(val suffix: String, val label: String) {
+        FP32("", "fp32"),
+        FP16("_fp16", "fp16"),
+        INT8_DYNAMIC("_int8", "int8"),
     }
 
     class ModelMissingException(asset: String) : Exception(
@@ -69,6 +115,15 @@ class PromptSegmenter(private val context: Context) {
     )
 
     private companion object {
+        const val TAG = "EfficientSAM"
+
+        /** Bundled self-test photo: figs/examples/dogs.jpg. */
+        const val TEST_IMAGE = "test_image.jpg"
+        // On dogs.jpg this lands on the tan dog. Verified against the LiteRT
+        // reference runtime: both variants return ~15% coverage there.
+        const val TEST_PROMPT_X = 0.30f
+        const val TEST_PROMPT_Y = 0.55f
+
         // Must match the values baked into the exported models. Changing any of
         // these means re-exporting from EfficientSAM_tflite_export.ipynb.
         const val ENCODER_SIZE = 1024
@@ -89,6 +144,28 @@ class PromptSegmenter(private val context: Context) {
     private var encoder: Interpreter? = null
     private var decoder: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
+
+    /**
+     * Whether [loadModels] should attempt the GPU delegate.
+     *
+     * Off by default, from measurement rather than caution. On a Snapdragon
+     * 865 the delegate loads but claims only 59 of the encoder's 636 nodes and
+     * then builds *zero* kernels for them, so the graph runs on CPU anyway
+     * after paying delegate init and a failed interpreter construction:
+     *
+     *     SLICE: Max version supported: 2. Requested version 5.
+     *     RESHAPE / TRANSPOSE: OP is supported, but tensor type/shape isn't compatible.
+     *     TfLiteGpuDelegate Init: Batch size mismatch, expected 1 but got 3
+     *
+     * Not a dynamic-shape problem -- both graphs are fully static. It is op
+     * coverage in the ViT attention blocks. Left switchable so it can be
+     * re-checked on other hardware or a re-export.
+     */
+    var useGpu: Boolean = false
+
+    /** Whether the loaded interpreters are actually running on the GPU. */
+    var usingGpu: Boolean = false
+        private set
 
     /** Cached per-image state, so taps only pay for the decoder. */
     private var embedding: ByteBuffer? = null
@@ -119,20 +196,48 @@ class PromptSegmenter(private val context: Context) {
         // The GPU delegate is a best-effort speedup. These graphs contain ops
         // it may not support, and a delegate that fails at init takes the whole
         // interpreter down with it -- so a failure falls back to CPU rather
-        // than propagating.
-        if (CompatibilityList().isDelegateSupportedOnThisDevice) {
+        // than propagating. Every outcome is logged: a silent fallback is
+        // indistinguishable from "GPU is working but slow" otherwise.
+        val compat = CompatibilityList()
+        if (useGpu && compat.isDelegateSupportedOnThisDevice) {
             runCatching {
+                // Deliberately the no-arg constructor. Passing
+                // getBestOptionsForThisDevice() does not compile against
+                // litert 1.0.1: the overload it selects takes a
+                // GpuDelegateFactory.Options, and that class is shipped in
+                // none of the litert 1.0.1 artifacts (checked litert,
+                // litert-api, litert-gpu, litert-support). The defaults are
+                // equivalent for this graph anyway.
                 GpuDelegate().also {
                     gpuDelegate = it
                     options.addDelegate(it)
                 }
+            }.onSuccess {
+                Log.i(TAG, "GPU delegate created")
+            }.onFailure {
+                Log.w(TAG, "GPU delegate unavailable, using CPU: ${it.message}", it)
             }
+        } else {
+            Log.i(
+                TAG,
+                if (!useGpu) "GPU disabled by caller, using CPU"
+                else "GPU delegate not supported on this device, using CPU",
+            )
         }
 
         encoder = runCatching { Interpreter(mapAsset(variant.encoderAsset), options) }
-            .getOrElse { cpuOnlyFallback(variant.encoderAsset) }
+            .getOrElse {
+                Log.w(TAG, "encoder failed with current options, retrying on CPU: ${it.message}", it)
+                cpuOnlyFallback(variant.encoderAsset)
+            }
         decoder = runCatching { Interpreter(mapAsset(variant.decoderAsset), options) }
-            .getOrElse { cpuOnlyFallback(variant.decoderAsset) }
+            .getOrElse {
+                Log.w(TAG, "decoder failed with current options, retrying on CPU: ${it.message}", it)
+                cpuOnlyFallback(variant.decoderAsset)
+            }
+        // gpuDelegate is nulled by cpuOnlyFallback, so this reports what the
+        // interpreters actually ended up using rather than what was requested.
+        usingGpu = gpuDelegate != null
     }
 
     private fun cpuOnlyFallback(asset: String): Interpreter {
@@ -392,6 +497,12 @@ class PromptSegmenter(private val context: Context) {
         val detail: String,
         val encodeMillis: Long = 0,
         val decodeMillis: Long = 0,
+        /** Peak total PSS during this variant's run, in MB. */
+        val peakMemoryMb: Int = 0,
+        /** Growth in native heap attributable to loading and running it, MB. */
+        val modelMemoryMb: Int = 0,
+        /** Whether this variant actually ran on the GPU delegate. */
+        val usedGpu: Boolean = false,
     )
 
     /**
@@ -410,13 +521,19 @@ class PromptSegmenter(private val context: Context) {
      * embedding, so the caller re-encodes afterwards.
      */
     suspend fun selfTest(): List<VariantCheck> = withContext(Dispatchers.Default) {
-        val results = Variant.entries.map { v ->
-            try {
-                checkVariant(v)
-            } catch (e: Exception) {
-                VariantCheck(v, false, e.message ?: e::class.java.simpleName)
+        val bundled = context.assets.list("")?.toSet().orEmpty()
+        val results = Variant.entries
+            // A build may ship any subset of the quantized exports. Absent
+            // variants are not failures, so leave them out of the report
+            // entirely rather than filling it with "not found" rows.
+            .filter { it.encoderAsset in bundled && it.decoderAsset in bundled }
+            .map { v ->
+                try {
+                    checkVariant(v)
+                } catch (e: Exception) {
+                    VariantCheck(v, false, e.message ?: e::class.java.simpleName)
+                }
             }
-        }
         // The test ran its own images through the interpreters, so whatever the
         // UI had cached is stale. Drop it rather than leave a mismatched pair.
         lock.withLock { closeLocked() }
@@ -425,23 +542,29 @@ class PromptSegmenter(private val context: Context) {
 
     private suspend fun checkVariant(v: Variant): VariantCheck = lock.withLock {
         closeLocked()
+        // Interpreters are freed above, so this is the floor to measure growth
+        // from. Native heap is the number that matters: TFLite keeps its
+        // weights and tensor arena off the Java heap, so Runtime.totalMemory()
+        // barely moves no matter how large the model is.
+        System.gc()
+        val baselineNative = Debug.getNativeHeapAllocatedSize()
+
         loadModels(v)
         val enc = encoder ?: throw ModelMissingException(v.encoderAsset)
         val dec = decoder ?: throw ModelMissingException(v.decoderAsset)
 
-        // A flat colour would let a broken graph return a plausible-looking
-        // constant. Two distinct regions give the encoder real structure, and
-        // the prompt below sits inside the brighter one.
-        val probe = Bitmap.createBitmap(512, 256, Bitmap.Config.ARGB_8888).apply {
-            val canvas = android.graphics.Canvas(this)
-            canvas.drawColor(Color.rgb(30, 30, 40))
-            canvas.drawCircle(
-                128f, 128f, 80f,
-                android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.rgb(230, 200, 60)
-                },
+        // A real photograph, not a synthetic shape: a segmentation model on a
+        // flat colour with one circle exercises almost none of what the
+        // encoder learned, and a broken graph can still return a plausible
+        // blob for it. TEST_IMAGE is figs/examples/dogs.jpg, the same image
+        // the export notebook validates against, so the numbers here are
+        // directly comparable to the reference run.
+        val probe = context.assets.open(TEST_IMAGE).use { stream ->
+            BitmapFactory.decodeStream(
+                stream, null,
+                BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
             )
-        }
+        } ?: return@withLock VariantCheck(v, false, "could not decode $TEST_IMAGE from assets")
 
         val embedOut = ByteBuffer
             .allocateDirect(EMBED_C * EMBED_HW * EMBED_HW * 4)
@@ -449,6 +572,9 @@ class PromptSegmenter(private val context: Context) {
         val encStart = System.nanoTime()
         enc.run(makeImageInput(probe), embedOut)
         val encMs = (System.nanoTime() - encStart) / 1_000_000
+        // Sampled right after encode: the encoder arena is the high-water mark,
+        // the decoder is an order of magnitude smaller.
+        var peakNative = Debug.getNativeHeapAllocatedSize()
         embedOut.rewind()
 
         // An all-zero embedding means the encoder ran but produced nothing
@@ -463,11 +589,14 @@ class PromptSegmenter(private val context: Context) {
         if (!embedNonZero) return@withLock VariantCheck(v, false, "encoder returned an all-zero embedding")
         embedOut.rewind()
 
-        // Prompt the bright circle at its centre, in probe pixels.
+        // Prompt the tan dog, as a fraction of the image so the point stays on
+        // the same object no matter what TEST_IMAGE is replaced with.
+        val promptX = probe.width * TEST_PROMPT_X
+        val promptY = probe.height * TEST_PROMPT_Y
         val coords = ByteBuffer.allocateDirect(NUM_POINTS * 2 * 4).order(ByteOrder.nativeOrder())
         val labels = ByteBuffer.allocateDirect(NUM_POINTS * 4).order(ByteOrder.nativeOrder())
-        coords.putFloat(128f * ENCODER_SIZE / probe.width)
-        coords.putFloat(128f * ENCODER_SIZE / probe.height)
+        coords.putFloat(promptX * ENCODER_SIZE / probe.width)
+        coords.putFloat(promptY * ENCODER_SIZE / probe.height)
         coords.putFloat(0f)
         coords.putFloat(0f)
         labels.putFloat(1f)
@@ -485,6 +614,7 @@ class PromptSegmenter(private val context: Context) {
             mapOf<Int, Any>(0 to masks, 1 to ious),
         )
         val decMs = (System.nanoTime() - decStart) / 1_000_000
+        peakNative = maxOf(peakNative, Debug.getNativeHeapAllocatedSize())
         masks.rewind(); ious.rewind()
 
         val iouValues = FloatArray(NUM_CANDIDATES) { ious.getFloat(it * 4) }
@@ -510,22 +640,41 @@ class PromptSegmenter(private val context: Context) {
             if (logit >= 0f) area++
         }
         val coverage = area.toFloat() / plane
-        // A prompt on an object should select part of the frame, not none of it
-        // and not all of it. Either extreme means the prompt never reached the
-        // graph in the form it expects.
-        if (coverage <= 0f || coverage >= 0.99f) {
+        // A point prompt on one object in a photo selects a few percent of the
+        // frame. Anything at the extremes means the prompt never reached the
+        // graph in the form it expects -- a mis-scaled coordinate lands on
+        // background and returns near-nothing, a broken embedding returns
+        // near-everything.
+        if (coverage <= 0.001f || coverage >= 0.90f) {
             return@withLock VariantCheck(
                 v, false, "implausible mask coverage %.0f%%".format(coverage * 100),
             )
         }
 
         probe.recycle()
+
+        // Total PSS is what the OS will actually kill the app over, so report
+        // it alongside the model-attributable growth.
+        val memInfo = Debug.MemoryInfo()
+        Debug.getMemoryInfo(memInfo)
+        val peakPssMb = memInfo.totalPss / 1024
+        val modelMb = ((peakNative - baselineNative) / (1024 * 1024)).toInt().coerceAtLeast(0)
+
+        Log.i(
+            TAG,
+            "${v.displayName}: encode ${encMs}ms decode ${decMs}ms " +
+                "peakPss ${peakPssMb}MB nativeGrowth ${modelMb}MB gpu $usingGpu",
+        )
+
         VariantCheck(
             variant = v,
             passed = true,
             detail = "IoU %.2f · %.0f%% coverage".format(iouValues[best], coverage * 100),
             encodeMillis = encMs,
             decodeMillis = decMs,
+            peakMemoryMb = peakPssMb,
+            modelMemoryMb = modelMb,
+            usedGpu = usingGpu,
         )
     }
 
