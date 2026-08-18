@@ -204,20 +204,49 @@ private fun LandingView(
 
         Spacer(Modifier.height(32.dp))
 
+        // Split across two rows rather than one: the variant list is the cross
+        // product of size and precision, and six segments in a row is
+        // unreadable on a phone.
         Text("Model", style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.height(6.dp))
+        val sizes = listOf("vitt" to "ViT-Tiny", "vits" to "ViT-Small")
         SingleChoiceSegmentedButtonRow {
-            PromptSegmenter.Variant.entries.forEachIndexed { index, v ->
+            sizes.forEachIndexed { index, (id, label) ->
                 SegmentedButton(
-                    selected = variant == v,
-                    onClick = { onVariantChange(v) },
-                    shape = SegmentedButtonDefaults.itemShape(
-                        index = index,
-                        count = PromptSegmenter.Variant.entries.size,
-                    ),
-                ) { Text(v.displayName) }
+                    selected = variant.id == id,
+                    onClick = {
+                        // Keep the current precision if that combination was
+                        // bundled, else fall back to whatever this size has.
+                        val want = PromptSegmenter.Variant.entries.firstOrNull {
+                            it.id == id && it.precision == variant.precision
+                        }
+                        onVariantChange(want ?: PromptSegmenter.Variant.entries.first { it.id == id })
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sizes.size),
+                ) { Text(label) }
             }
         }
+
+        Spacer(Modifier.height(10.dp))
+        Text("Precision", style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.height(6.dp))
+        SingleChoiceSegmentedButtonRow {
+            PromptSegmenter.Precision.entries.forEachIndexed { index, p ->
+                SegmentedButton(
+                    selected = variant.precision == p,
+                    onClick = {
+                        PromptSegmenter.Variant.entries
+                            .firstOrNull { it.id == variant.id && it.precision == p }
+                            ?.let(onVariantChange)
+                    },
+                    shape = SegmentedButtonDefaults.itemShape(
+                        index = index,
+                        count = PromptSegmenter.Precision.entries.size,
+                    ),
+                ) { Text(p.label) }
+            }
+        }
+
         Spacer(Modifier.height(6.dp))
         Text(
             variant.blurb,

@@ -225,29 +225,36 @@ class PromptSegmenter(private val context: Context) {
             )
         }
 
-        encoder = runCatching { Interpreter(mapAsset(variant.encoderAsset), options) }
-            .getOrElse {
-                Log.w(TAG, "encoder failed with current options, retrying on CPU: ${it.message}", it)
-                cpuOnlyFallback(variant.encoderAsset)
-            }
-        decoder = runCatching { Interpreter(mapAsset(variant.decoderAsset), options) }
-            .getOrElse {
-                Log.w(TAG, "decoder failed with current options, retrying on CPU: ${it.message}", it)
-                cpuOnlyFallback(variant.decoderAsset)
-            }
+        encoder = load(variant.encoderAsset, options)
+        decoder = load(variant.decoderAsset, options)
         // gpuDelegate is nulled by cpuOnlyFallback, so this reports what the
         // interpreters actually ended up using rather than what was requested.
         usingGpu = gpuDelegate != null
     }
 
-    private fun cpuOnlyFallback(asset: String): Interpreter {
-        gpuDelegate?.close()
-        gpuDelegate = null
-        return Interpreter(
-            mapAsset(asset),
-            Interpreter.Options().apply { numThreads = 4 },
-        )
-    }
+    /**
+     * Builds an interpreter, retrying without the GPU delegate if one was
+     * attached.
+     *
+     * The retry only happens when there is a delegate to drop. Retrying
+     * identical options would just raise the same error from a second call
+     * site and hide where it came from -- and some failures are properties of
+     * the model, not the delegate. The int8 decoder is the example: Android's
+     * kernel rejects int8 TRANSPOSE_CONV weights against float activations
+     * ("weights->type != input->type"), which no amount of retrying fixes, so
+     * it must surface to the caller rather than be swallowed.
+     */
+    private fun load(asset: String, options: Interpreter.Options): Interpreter =
+        runCatching { Interpreter(mapAsset(asset), options) }.getOrElse { first ->
+            if (gpuDelegate == null) {
+                Log.w(TAG, "$asset failed to load: ${first.message}", first)
+                throw first
+            }
+            Log.w(TAG, "$asset failed with GPU delegate, retrying on CPU: ${first.message}", first)
+            gpuDelegate?.close()
+            gpuDelegate = null
+            Interpreter(mapAsset(asset), Interpreter.Options().apply { numThreads = 4 })
+        }
 
     /**
      * Maps the model directly out of the APK. Requires `noCompress += "tflite"`
