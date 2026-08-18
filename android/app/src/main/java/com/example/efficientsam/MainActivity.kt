@@ -53,7 +53,8 @@ fun TapToSegmentScreen() {
     val scope = rememberCoroutineScope()
 
     val segmenter = remember { PromptSegmenter(context) }
-    DisposableEffect(Unit) { onDispose { segmenter.close() } }
+    val interactiveSeg = remember { InteractiveSeg(context) }
+    DisposableEffect(Unit) { onDispose { segmenter.close(); interactiveSeg.close() } }
 
     var variant by remember { mutableStateOf(PromptSegmenter.Variant.VITT) }
     var sourceImage by remember { mutableStateOf<Bitmap?>(null) }
@@ -65,14 +66,26 @@ fun TapToSegmentScreen() {
     var selfTestResults by remember { mutableStateOf<List<PromptSegmenter.VariantCheck>?>(null) }
     var isSelfTesting by remember { mutableStateOf(false) }
     var gridResults by remember { mutableStateOf<List<PromptSegmenter.GridResult>?>(null) }
+    var interactiveResults by remember { mutableStateOf<List<InteractiveSeg.Result>?>(null) }
+    // interactiveseg is a different model family, not a Variant: single stage,
+    // 400x400, its own guidance input. Selecting it swaps which object serves
+    // the tap flow rather than picking a different PromptSegmenter.Variant.
+    var useInteractive by remember { mutableStateOf(false) }
 
     fun encode(bitmap: Bitmap) {
         scope.launch {
             isEncoding = true
             result = null
             try {
-                segmenter.encode(bitmap, variant)
-                encodeMillis = segmenter.encodeMillis
+                if (useInteractive) {
+                    // No encoder pass: this only builds the interpreter and
+                    // resizes, so the "preparing" state is near-instant.
+                    interactiveSeg.prepare(bitmap)
+                    encodeMillis = 0
+                } else {
+                    segmenter.encode(bitmap, variant)
+                    encodeMillis = segmenter.encodeMillis
+                }
             } catch (e: Exception) {
                 error = e.message ?: "Encoding failed."
                 sourceImage = null
@@ -123,16 +136,27 @@ fun TapToSegmentScreen() {
                 LandingView(
                     variant = variant,
                     onVariantChange = { variant = it },
+                    useInteractive = useInteractive,
+                    onUseInteractiveChange = { useInteractive = it },
+                    interactiveBundled = interactiveSeg.isBundled,
                     onPick = { picker.launch("image/*") },
                     isSelfTesting = isSelfTesting,
                     selfTestResults = selfTestResults,
                     gridResults = gridResults,
+                    interactiveResults = interactiveResults,
                     onBenchmarkGrid = {
                         scope.launch {
                             isSelfTesting = true
                             gridResults = null
+                            interactiveResults = null
                             try {
                                 gridResults = segmenter.benchmarkGrid()
+                                // Run the comparison model in the same pass so
+                                // both sets of numbers come from one thermal
+                                // state -- times drift materially otherwise.
+                                if (interactiveSeg.isBundled) {
+                                    interactiveResults = interactiveSeg.benchmark()
+                                }
                             } catch (e: Exception) {
                                 error = e.message ?: "Benchmark failed."
                             } finally {
@@ -159,6 +183,7 @@ fun TapToSegmentScreen() {
                     image = image,
                     result = result,
                     variant = variant,
+                    useInteractive = useInteractive,
                     isEncoding = isEncoding,
                     isDecoding = isDecoding,
                     encodeMillis = encodeMillis,
@@ -166,7 +191,11 @@ fun TapToSegmentScreen() {
                         scope.launch {
                             isDecoding = true
                             try {
-                                result = segmenter.segmentAtPoint(px, py)
+                                result = if (useInteractive) {
+                                    interactiveSeg.segment(px, py)
+                                } else {
+                                    segmenter.segmentAtPoint(px, py)
+                                }
                             } catch (e: Exception) {
                                 error = e.message ?: "Segmentation failed."
                             } finally {
@@ -194,11 +223,15 @@ fun TapToSegmentScreen() {
 private fun LandingView(
     variant: PromptSegmenter.Variant,
     onVariantChange: (PromptSegmenter.Variant) -> Unit,
+    useInteractive: Boolean,
+    onUseInteractiveChange: (Boolean) -> Unit,
+    interactiveBundled: Boolean,
     onPick: () -> Unit,
     isSelfTesting: Boolean,
     selfTestResults: List<PromptSegmenter.VariantCheck>?,
     onSelfTest: () -> Unit,
     gridResults: List<PromptSegmenter.GridResult>?,
+    interactiveResults: List<InteractiveSeg.Result>?,
     onBenchmarkGrid: () -> Unit,
 ) {
     // Scrollable, because the reports below grow past the screen: the grid
@@ -233,47 +266,66 @@ private fun LandingView(
         // unreadable on a phone.
         Text("Model", style = MaterialTheme.typography.labelMedium)
         Spacer(Modifier.height(6.dp))
-        val sizes = listOf("vitt" to "ViT-Tiny", "vits" to "ViT-Small")
+        // Third entry is a different model family, not another ViT size, so it
+        // is selected by a flag rather than by picking a Variant.
+        val sizes = buildList {
+            add("vitt" to "ViT-Tiny")
+            add("vits" to "ViT-Small")
+            if (interactiveBundled) add("interactiveseg" to "InteractiveSeg")
+        }
         SingleChoiceSegmentedButtonRow {
             sizes.forEachIndexed { index, (id, label) ->
                 SegmentedButton(
-                    selected = variant.id == id,
+                    selected = if (id == "interactiveseg") useInteractive
+                               else !useInteractive && variant.id == id,
                     onClick = {
-                        // Keep the current precision if that combination was
-                        // bundled, else fall back to whatever this size has.
-                        val want = PromptSegmenter.Variant.entries.firstOrNull {
-                            it.id == id && it.precision == variant.precision
+                        if (id == "interactiveseg") {
+                            onUseInteractiveChange(true)
+                        } else {
+                            onUseInteractiveChange(false)
+                            // Keep the current precision if that combination was
+                            // bundled, else fall back to whatever this size has.
+                            val want = PromptSegmenter.Variant.entries.firstOrNull {
+                                it.id == id && it.precision == variant.precision
+                            }
+                            onVariantChange(
+                                want ?: PromptSegmenter.Variant.entries.first { it.id == id },
+                            )
                         }
-                        onVariantChange(want ?: PromptSegmenter.Variant.entries.first { it.id == id })
                     },
                     shape = SegmentedButtonDefaults.itemShape(index = index, count = sizes.size),
                 ) { Text(label) }
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        Text("Precision", style = MaterialTheme.typography.labelMedium)
-        Spacer(Modifier.height(6.dp))
-        SingleChoiceSegmentedButtonRow {
-            PromptSegmenter.Precision.entries.forEachIndexed { index, p ->
-                SegmentedButton(
-                    selected = variant.precision == p,
-                    onClick = {
-                        PromptSegmenter.Variant.entries
-                            .firstOrNull { it.id == variant.id && it.precision == p }
-                            ?.let(onVariantChange)
-                    },
-                    shape = SegmentedButtonDefaults.itemShape(
-                        index = index,
-                        count = PromptSegmenter.Precision.entries.size,
-                    ),
-                ) { Text(p.label) }
+        // interactiveseg ships as a single fp16 export, so there is no
+        // precision axis to offer for it.
+        if (!useInteractive) {
+            Spacer(Modifier.height(10.dp))
+            Text("Precision", style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(6.dp))
+            SingleChoiceSegmentedButtonRow {
+                PromptSegmenter.Precision.entries.forEachIndexed { index, p ->
+                    SegmentedButton(
+                        selected = variant.precision == p,
+                        onClick = {
+                            PromptSegmenter.Variant.entries
+                                .firstOrNull { it.id == variant.id && it.precision == p }
+                                ?.let(onVariantChange)
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = PromptSegmenter.Precision.entries.size,
+                        ),
+                    ) { Text(p.label) }
+                }
             }
         }
 
         Spacer(Modifier.height(6.dp))
         Text(
-            variant.blurb,
+            if (useInteractive) "Samsung CNN · 400×400 · fp16 · no cached embedding"
+            else variant.blurb,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -323,6 +375,52 @@ private fun LandingView(
         if (gridResults != null && gridResults.isNotEmpty()) {
             Spacer(Modifier.height(16.dp))
             GridReport(gridResults)
+        }
+
+        if (interactiveResults != null && interactiveResults.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            InteractiveSegReport(interactiveResults)
+        }
+    }
+}
+
+/**
+ * Samsung's `interactiveseg` for comparison.
+ *
+ * Reported separately from the grid because it is not a variant of the same
+ * thing: one CNN stage at 400x400 against a split ViT at 1024x1024. There is no
+ * encode/decode column to fill -- every click runs the whole network.
+ */
+@Composable
+private fun InteractiveSegReport(results: List<InteractiveSeg.Result>) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text(
+                "interactiveseg (Samsung, CNN)",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "single stage · 400×400 · no cached embedding",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(6.dp))
+            val base = results.firstOrNull { it.threads == 1 }?.inferenceMillis
+            results.forEach { r ->
+                val speedup = base?.let { " ${"%.2f".format(it.toFloat() / r.inferenceMillis)}x" } ?: ""
+                Text(
+                    "${r.threads}t ${r.inferenceMillis}ms · ${"%.0f".format(r.coverage * 100)}% cov · " +
+                        "${r.peakMemoryMb}MB peak · ${r.modelMemoryMb}MB model$speedup",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -435,6 +533,7 @@ private fun TapView(
     image: Bitmap,
     result: PromptSegmenter.Result?,
     variant: PromptSegmenter.Variant,
+    useInteractive: Boolean,
     isEncoding: Boolean,
     isDecoding: Boolean,
     encodeMillis: Long,
@@ -509,9 +608,17 @@ private fun TapView(
                     .padding(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Stat("%.2f".format(result.iou), "IoU", Modifier.weight(1f))
+                Stat(
+                    "%.2f".format(result.iou),
+                    if (useInteractive) "mean prob" else "IoU",
+                    Modifier.weight(1f),
+                )
                 Stat("%.0f%%".format(result.coverage * 100), "coverage", Modifier.weight(1f))
-                Stat("${result.decodeMillis}ms", "decode", Modifier.weight(1f))
+                Stat(
+                    "${result.decodeMillis}ms",
+                    if (useInteractive) "inference" else "decode",
+                    Modifier.weight(1f),
+                )
             }
         } else if (!isEncoding) {
             Text(
@@ -523,7 +630,10 @@ private fun TapView(
 
         Spacer(Modifier.height(8.dp))
         Text(
-            "${variant.displayName} · encoded once in ${"%.2f".format(encodeMillis / 1000f)}s",
+            // interactiveseg has no encode step to report -- every tap runs the
+            // whole network, so the per-tap number is the only honest one.
+            if (useInteractive) "InteractiveSeg · full model per tap"
+            else "${variant.displayName} · encoded once in ${"%.2f".format(encodeMillis / 1000f)}s",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
