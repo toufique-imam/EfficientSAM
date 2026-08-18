@@ -70,15 +70,41 @@ Two graphs, run at different rates:
 Caching the embedding is what makes tapping feel instant: the encoder is
 seconds, the decoder is well under one.
 
-Measured with the in-app self test (fp32, CPU/XNNPACK):
+Measured with the in-app **Benchmark Grid** (encoder, at each device's best
+thread count — 4 on the S20 FE, 8 on the M12):
 
-| device | vitt encode | vits encode | decode |
+| variant | S20 FE (SD 865) | M12 (Exynos 850) | peak PSS |
 | --- | --- | --- | --- |
-| Galaxy S20 FE (Snapdragon 865) | ~7.5 s | ~18.9 s | ~0.3 s |
-| Galaxy M12 (Exynos 850) | ~22.4 s | ~55.3 s | ~0.9 s |
+| ViT-Tiny fp32 | 5.2 s | 19.6 s | ~1.0 GB |
+| ViT-Tiny fp16 | 5.4 s | 20.4 s | ~1.1 GB |
+| ViT-Tiny int8 | 5.1 s | 18.4 s | ~1.0 GB |
+| ViT-Small fp32 | 12.7 s | 50.4 s | ~1.7 GB |
+| ViT-Small fp16 | 14.7 s | 56.3 s | ~2.0 GB |
+| ViT-Small int8 | **10.9 s** | **31.1 s** | ~1.6 GB |
 
-Peak memory is substantial — 0.9-1.9 GB depending on variant — hence
+Decode is ~0.2 s (S20 FE) / ~0.9 s (M12), flat across variant and thread count.
+
+Peak memory is substantial — 1.0-2.0 GB depending on variant — hence
 `android:largeHeap="true"`.
+
+### Threads: more is not better
+
+`PromptSegmenter.threads` defaults to the size of the **big cluster**, not the
+core count: cores whose `cpuinfo_max_freq` is within 15% of the maximum. That
+gives 4 on the S20 FE and 8 on the M12, and both are the measured optimum.
+
+On the S20 FE (4× A55 + 4× A77) 4 threads beats 8 in *every* variant — TFLite
+splits work evenly, so the little cores finish late and the big cores wait on
+stragglers. On the single-tier M12 (8× A55) 8 beats 4, but only by ~7%.
+
+Counting cores at exactly the top frequency would be wrong: the 865 clocks one
+prime core to 2841 MHz and its three siblings to 2419 MHz, so an exact match
+returns 1 and idles the rest of the big cluster.
+
+fp16 is worth calling out separately: it is **not faster** on either device and
+uses more memory, because the weights are stored fp16 and dequantized to fp32
+to compute. int8 is the only variant that meaningfully wins, and mostly for
+ViT-Small.
 
 ### Why it runs on the CPU
 

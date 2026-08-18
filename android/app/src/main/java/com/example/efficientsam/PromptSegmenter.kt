@@ -168,16 +168,25 @@ class PromptSegmenter(private val context: Context) {
         private set
 
     /**
-     * Interpreter threads. Defaults to every core.
+     * Interpreter threads. Defaults to the number of *fastest* cores, which is
+     * not the same as the core count.
      *
-     * The old default capped at 4, which left half of an 8-core device idle.
-     * Raising it is worth little though: measured on the M12 (8x Cortex-A55,
-     * no big/little split) the vitt encoder runs 36.0 s at 1 thread, 21.3 s at
-     * 4, and 19.8 s at 8 -- so 4 -> 8 buys about 7%. This graph is closer to
-     * memory-bound than compute-bound; a third of its ops are RESHAPE and
-     * TRANSPOSE, which move data without doing arithmetic.
+     * Measured both ways on both test devices, and the answer differs by SoC:
+     *
+     * - Snapdragon 865 (4x A55 + 4x A77): 4 threads beats 8 in every variant,
+     *   because TFLite splits work evenly and the little cores finish late,
+     *   leaving the big cores waiting on stragglers. vitt fp32 is 5.2 s at 4
+     *   threads and 5.4 s at 8.
+     * - Exynos 850 (8x A55, one tier): 8 beats 4, though only by ~7%. vitt
+     *   fp32 is 21.2 s at 4 and 19.6 s at 8.
+     *
+     * Counting the top frequency tier gives 4 on the first and 8 on the second,
+     * which is the better choice on each. Beyond that, threading has little
+     * left to give: a third of the encoder's 637 ops are RESHAPE and TRANSPOSE,
+     * which move data without doing arithmetic, so the graph is closer to
+     * memory-bound than compute-bound.
      */
-    var threads: Int = Runtime.getRuntime().availableProcessors()
+    var threads: Int = fastestCoreCount()
 
     /** Cached per-image state, so taps only pay for the decoder. */
     private var embedding: ByteBuffer? = null
@@ -242,6 +251,32 @@ class PromptSegmenter(private val context: Context) {
         // gpuDelegate is nulled by cpuOnlyFallback, so this reports what the
         // interpreters actually ended up using rather than what was requested.
         usingGpu = gpuDelegate != null
+    }
+
+    /**
+     * Size of the device's "big" CPU cluster.
+     *
+     * Counting cores at exactly the top frequency is wrong: the Snapdragon 865
+     * clocks one prime core to 2841 MHz and its three siblings to 2419 MHz, so
+     * an exact match returns 1 and leaves the rest of the big cluster idle. The
+     * cluster is what matters, so cores within 15% of the maximum count as big
+     * -- that groups 2841 with 2419 (85%) while still excluding the 1804 MHz
+     * A55s (63%).
+     *
+     * Falls back to the full core count when sysfs is unreadable, which is
+     * correct for a single-tier CPU and merely suboptimal otherwise.
+     */
+    private fun fastestCoreCount(): Int {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val freqs = (0 until cores).mapNotNull { cpu ->
+            runCatching {
+                java.io.File("/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq")
+                    .readText().trim().toLong()
+            }.getOrNull()
+        }
+        if (freqs.size != cores || freqs.isEmpty()) return cores
+        val threshold = freqs.max() * 85 / 100
+        return freqs.count { it >= threshold }.coerceAtLeast(1)
     }
 
     /**

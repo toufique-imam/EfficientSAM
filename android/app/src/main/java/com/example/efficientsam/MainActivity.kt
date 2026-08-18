@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -199,12 +201,17 @@ private fun LandingView(
     gridResults: List<PromptSegmenter.GridResult>?,
     onBenchmarkGrid: () -> Unit,
 ) {
+    // Scrollable, because the reports below grow past the screen: the grid
+    // benchmark alone is 18 rows. Center the content only while it still fits,
+    // otherwise a Center arrangement pins the top of a too-tall column off
+    // screen and the first rows become unreachable.
+    val scroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 32.dp),
+            .verticalScroll(scroll)
+            .padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             "Tap to Segment",
