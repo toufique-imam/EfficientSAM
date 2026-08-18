@@ -60,6 +60,8 @@ fun TapToSegmentScreen() {
     var isDecoding by remember { mutableStateOf(false) }
     var encodeMillis by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
+    var selfTestResults by remember { mutableStateOf<List<PromptSegmenter.VariantCheck>?>(null) }
+    var isSelfTesting by remember { mutableStateOf(false) }
 
     fun encode(bitmap: Bitmap) {
         scope.launch {
@@ -119,6 +121,21 @@ fun TapToSegmentScreen() {
                     variant = variant,
                     onVariantChange = { variant = it },
                     onPick = { picker.launch("image/*") },
+                    isSelfTesting = isSelfTesting,
+                    selfTestResults = selfTestResults,
+                    onSelfTest = {
+                        scope.launch {
+                            isSelfTesting = true
+                            selfTestResults = null
+                            try {
+                                selfTestResults = segmenter.selfTest()
+                            } catch (e: Exception) {
+                                error = e.message ?: "Self test failed."
+                            } finally {
+                                isSelfTesting = false
+                            }
+                        }
+                    },
                 )
             } else {
                 TapView(
@@ -161,6 +178,9 @@ private fun LandingView(
     variant: PromptSegmenter.Variant,
     onVariantChange: (PromptSegmenter.Variant) -> Unit,
     onPick: () -> Unit,
+    isSelfTesting: Boolean,
+    selfTestResults: List<PromptSegmenter.VariantCheck>?,
+    onSelfTest: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -208,9 +228,84 @@ private fun LandingView(
         Spacer(Modifier.height(32.dp))
         Button(
             onClick = onPick,
+            enabled = !isSelfTesting,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Pick an Image", fontWeight = FontWeight.SemiBold)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onSelfTest,
+            enabled = !isSelfTesting,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (isSelfTesting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(10.dp))
+                // Both encoders run here, so this is seconds, not milliseconds.
+                Text("Testing both models…")
+            } else {
+                Text("Run Self Test")
+            }
+        }
+
+        if (selfTestResults != null) {
+            Spacer(Modifier.height(16.dp))
+            SelfTestReport(selfTestResults)
+        }
+    }
+}
+
+/**
+ * Per-variant pass/fail from [PromptSegmenter.selfTest]. Failures show the
+ * reason rather than just a cross -- the useful cases (missing asset, shape
+ * mismatch) are all distinguishable from the message.
+ */
+@Composable
+private fun SelfTestReport(results: List<PromptSegmenter.VariantCheck>) {
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            results.forEachIndexed { index, check ->
+                if (index > 0) Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (check.passed) "PASS" else "FAIL",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (check.passed) Color(0xFF34C759) else MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        check.variant.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (check.passed) {
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${check.encodeMillis}ms enc · ${check.decodeMillis}ms dec",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Text(
+                    check.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (check.passed) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.error,
+                )
+            }
         }
     }
 }

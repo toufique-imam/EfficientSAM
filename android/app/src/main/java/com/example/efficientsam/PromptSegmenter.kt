@@ -381,7 +381,162 @@ class PromptSegmenter(private val context: Context) {
         return out
     }
 
-    fun close() {
+    // MARK: - Self test
+
+    /** One variant's result from [selfTest]. */
+    @Immutable
+    data class VariantCheck(
+        val variant: Variant,
+        val passed: Boolean,
+        /** Failure reason, or the measured timings when it passed. */
+        val detail: String,
+        val encodeMillis: Long = 0,
+        val decodeMillis: Long = 0,
+    )
+
+    /**
+     * Runs both variants end-to-end on a synthetic image and checks the
+     * numbers coming back are usable.
+     *
+     * This exists because the common failure here is silent. A missing asset
+     * throws loudly, but a mismatched export does not: the interpreter happily
+     * allocates, and the first sign of trouble is a mask that looks subtly
+     * wrong. So this asserts the parts that would be wrong in that case --
+     * output shapes, finite logits, an IoU in [0, 1], and a mask that is
+     * neither empty nor the whole frame.
+     *
+     * Every variant is tested even if one fails, so a report covers both
+     * rather than stopping at the first problem. Running it evicts the cached
+     * embedding, so the caller re-encodes afterwards.
+     */
+    suspend fun selfTest(): List<VariantCheck> = withContext(Dispatchers.Default) {
+        val results = Variant.entries.map { v ->
+            try {
+                checkVariant(v)
+            } catch (e: Exception) {
+                VariantCheck(v, false, e.message ?: e::class.java.simpleName)
+            }
+        }
+        // The test ran its own images through the interpreters, so whatever the
+        // UI had cached is stale. Drop it rather than leave a mismatched pair.
+        lock.withLock { closeLocked() }
+        results
+    }
+
+    private suspend fun checkVariant(v: Variant): VariantCheck = lock.withLock {
+        closeLocked()
+        loadModels(v)
+        val enc = encoder ?: throw ModelMissingException(v.encoderAsset)
+        val dec = decoder ?: throw ModelMissingException(v.decoderAsset)
+
+        // A flat colour would let a broken graph return a plausible-looking
+        // constant. Two distinct regions give the encoder real structure, and
+        // the prompt below sits inside the brighter one.
+        val probe = Bitmap.createBitmap(512, 256, Bitmap.Config.ARGB_8888).apply {
+            val canvas = android.graphics.Canvas(this)
+            canvas.drawColor(Color.rgb(30, 30, 40))
+            canvas.drawCircle(
+                128f, 128f, 80f,
+                android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.rgb(230, 200, 60)
+                },
+            )
+        }
+
+        val embedOut = ByteBuffer
+            .allocateDirect(EMBED_C * EMBED_HW * EMBED_HW * 4)
+            .order(ByteOrder.nativeOrder())
+        val encStart = System.nanoTime()
+        enc.run(makeImageInput(probe), embedOut)
+        val encMs = (System.nanoTime() - encStart) / 1_000_000
+        embedOut.rewind()
+
+        // An all-zero embedding means the encoder ran but produced nothing
+        // usable -- the decoder would still return a mask, just a meaningless
+        // one, so catch it here.
+        var embedNonZero = false
+        for (i in 0 until minOf(4096, EMBED_C * EMBED_HW * EMBED_HW)) {
+            val f = embedOut.getFloat(i * 4)
+            if (!f.isFinite()) return@withLock VariantCheck(v, false, "encoder produced non-finite values")
+            if (f != 0f) embedNonZero = true
+        }
+        if (!embedNonZero) return@withLock VariantCheck(v, false, "encoder returned an all-zero embedding")
+        embedOut.rewind()
+
+        // Prompt the bright circle at its centre, in probe pixels.
+        val coords = ByteBuffer.allocateDirect(NUM_POINTS * 2 * 4).order(ByteOrder.nativeOrder())
+        val labels = ByteBuffer.allocateDirect(NUM_POINTS * 4).order(ByteOrder.nativeOrder())
+        coords.putFloat(128f * ENCODER_SIZE / probe.width)
+        coords.putFloat(128f * ENCODER_SIZE / probe.height)
+        coords.putFloat(0f)
+        coords.putFloat(0f)
+        labels.putFloat(1f)
+        labels.putFloat(-1f)
+        coords.rewind(); labels.rewind()
+
+        val masks = ByteBuffer
+            .allocateDirect(NUM_CANDIDATES * OUTPUT_SIZE * OUTPUT_SIZE * 4)
+            .order(ByteOrder.nativeOrder())
+        val ious = ByteBuffer.allocateDirect(NUM_CANDIDATES * 4).order(ByteOrder.nativeOrder())
+
+        val decStart = System.nanoTime()
+        dec.runForMultipleInputsOutputs(
+            arrayOf<Any>(embedOut, coords, labels),
+            mapOf<Int, Any>(0 to masks, 1 to ious),
+        )
+        val decMs = (System.nanoTime() - decStart) / 1_000_000
+        masks.rewind(); ious.rewind()
+
+        val iouValues = FloatArray(NUM_CANDIDATES) { ious.getFloat(it * 4) }
+        if (iouValues.any { !it.isFinite() }) {
+            return@withLock VariantCheck(v, false, "decoder returned non-finite IoU")
+        }
+        val best = bestIndex(iouValues)
+        // The IoU head is an unbounded regression output, not a probability, so
+        // a confident prediction overshoots 1.0 slightly -- vitt returns ~1.003
+        // on this probe in the reference runtime too. Allow the overshoot and
+        // only flag values far enough out to mean the head is broken.
+        if (iouValues[best] < 0f || iouValues[best] > 1.05f) {
+            return@withLock VariantCheck(v, false, "IoU %.3f far outside [0,1]".format(iouValues[best]))
+        }
+
+        val plane = OUTPUT_SIZE * OUTPUT_SIZE
+        var area = 0
+        for (i in 0 until plane) {
+            val logit = masks.getFloat((best * plane + i) * 4)
+            if (!logit.isFinite()) {
+                return@withLock VariantCheck(v, false, "decoder returned non-finite mask logits")
+            }
+            if (logit >= 0f) area++
+        }
+        val coverage = area.toFloat() / plane
+        // A prompt on an object should select part of the frame, not none of it
+        // and not all of it. Either extreme means the prompt never reached the
+        // graph in the form it expects.
+        if (coverage <= 0f || coverage >= 0.99f) {
+            return@withLock VariantCheck(
+                v, false, "implausible mask coverage %.0f%%".format(coverage * 100),
+            )
+        }
+
+        probe.recycle()
+        VariantCheck(
+            variant = v,
+            passed = true,
+            detail = "IoU %.2f · %.0f%% coverage".format(iouValues[best], coverage * 100),
+            encodeMillis = encMs,
+            decodeMillis = decMs,
+        )
+    }
+
+    fun close() = closeLocked()
+
+    /**
+     * Releases the interpreters. Named to make the contract explicit: callers
+     * that already hold [lock] must use this rather than re-entering it --
+     * [Mutex] is not reentrant, so a nested `withLock` would deadlock.
+     */
+    private fun closeLocked() {
         encoder?.close()
         decoder?.close()
         gpuDelegate?.close()
