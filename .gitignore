@@ -11,3 +11,5 @@ weights/*.pt
 weights/*.pth
 weights/*.zip
 weights/*.onnx
+weights/coreml/
+weights/tflite/
